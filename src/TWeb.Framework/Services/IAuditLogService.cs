@@ -9,7 +9,7 @@ namespace TWeb.Framework.Services
 {
     public interface IAuditLogService
     {
-        void Log(AuditLogCategoryEnum cat, string message, AutitLogLevelEnum lvl = AutitLogLevelEnum.Information);
-        Task LogAsync(AuditLogCategoryEnum cat, string message, AutitLogLevelEnum lvl = AutitLogLevelEnum.Information, CancellationToken ct = default);
+        void Log(AuditLogCategoryEnum cat, string message, AutitLogLevelEnum lvl = AutitLogLevelEnum.Information, string? otherName = null);
+        Task LogAsync(AuditLogCategoryEnum cat, string message, AutitLogLevelEnum lvl = AutitLogLevelEnum.Information, string? otherName = null, CancellationToken ct = default);
     }
 }

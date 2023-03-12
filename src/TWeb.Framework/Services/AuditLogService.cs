@@ -1,10 +1,5 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using TWeb.Framework.Abstractions;
 using TWeb.Framework.DAL;
 
@@ -25,22 +20,25 @@ namespace TWeb.Framework.Services
             _httpContextAccessor = httpContextAccessor;
         }
 
-        private AuditLog CreateMessage(AuditLogCategoryEnum cat, string message, AutitLogLevelEnum lvl)
+        private async Task<AuditLog> CreateMessageAsync(AuditLogCategoryEnum cat, string message, AutitLogLevelEnum lvl, CancellationToken ct = default)
         {
-            string browserAgent = _httpContextAccessor.HttpContext?.Request?.Headers?.FirstOrDefault(x => x.Key == "UserAgent").Value ?? null;
-            string ip = _httpContextAccessor.HttpContext?.Connection?.RemoteIpAddress?.ToString() ?? null;
-            int? userId = _userManager.GetCurrentUser()?.Id ?? null;
+            string? browserAgent = null;
+            string? ip = null;
+            User? user = null;
 
-            _logger.LogDebug($"{(browserAgent ?? "NO AGENT")}|{(ip ?? "NO IP")}|{(userId ?? "Anonymouse")}| {message}");
+            try { browserAgent = _httpContextAccessor.HttpContext?.Request?.Headers?.FirstOrDefault(x => x.Key == "UserAgent").Value; } catch { }
+            try { ip = _httpContextAccessor.HttpContext?.Connection?.RemoteIpAddress?.ToString() ?? null; } catch { }
+            try { user = await _userManager.GetCurrentUserAsync(ct); } catch { }
+
+            _logger.LogDebug($"{(browserAgent ?? "NO AGENT")}|{(ip ?? "NO IP")}|{(user?.Name ?? "Anonymouse")}| {message}");
 
             return new AuditLog()
             {
-                Id = Guid.NewGuid(),
                 Date = DateTime.UtcNow,
                 BrowserUserAgent = browserAgent,
                 ClientIp = ip,
                 Message = message,
-                UserId = userId,
+                UserId = user?.Id,
                 Category = cat,
                 Level = lvl
             };
@@ -48,12 +46,27 @@ namespace TWeb.Framework.Services
 
         public void Log(AuditLogCategoryEnum cat, string message, AutitLogLevelEnum lvl = AutitLogLevelEnum.Information)
         {
-            _auditLogRepository.AddOrUpdate(CreateMessage(cat, message, lvl));
+            try
+            {
+                _auditLogRepository.AddOrUpdate(CreateMessageAsync(cat, message, lvl).Result);
+            }
+            catch(Exception ex)
+            {
+                _logger.LogError(ex, "Failed to create audit log");
+            }
         }
 
-        public Task LogAsync(AuditLogCategoryEnum cat, string message, AutitLogLevelEnum lvl = AutitLogLevelEnum.Information, CancellationToken ct = default)
+        public async Task LogAsync(AuditLogCategoryEnum cat, string message, AutitLogLevelEnum lvl = AutitLogLevelEnum.Information, CancellationToken ct = default)
         {
-            return _auditLogRepository.AddOrUpdateAsync(CreateMessage(cat, message, lvl), ct);
+            try
+            {
+                var log = await CreateMessageAsync(cat, message, lvl, ct);
+                await _auditLogRepository.AddOrUpdateAsync(log, ct);
+            }
+            catch(Exception ex)
+            {
+                _logger.LogError(ex, "Failed to create audit log");
+            }
         }
     }
 }

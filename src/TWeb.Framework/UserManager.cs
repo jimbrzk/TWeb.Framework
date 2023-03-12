@@ -15,6 +15,7 @@ using System.Threading.Tasks;
 using TWeb.Framework.Abstractions;
 using TWeb.Framework.DAL;
 using TWeb.Framework.Exceptions;
+using TWeb.Framework.Extensions;
 using TWeb.Framework.Options;
 using TWeb.Framework.Services;
 
@@ -90,10 +91,10 @@ namespace TWeb.Framework
 
             if (!_secretHashingService.ValidateHash(user.Password, password, user.Salt))
             {
-                if(_options.CurrentValue.AccountLockdownAfterFailedAttempts > 0)
+                if (_options.CurrentValue.AccountLockdownAfterFailedAttempts > 0)
                 {
                     user.FailedLogons++;
-                    if(_options.CurrentValue.AccountLockdownAfterFailedAttempts >= user.FailedLogons)
+                    if (_options.CurrentValue.AccountLockdownAfterFailedAttempts >= user.FailedLogons)
                     {
                         user.Locked = true;
                         _auditLogService?.Log(AuditLogCategoryEnum.User, $"Account of user '{user.Name}' has bean locked becaouse of too many invalid logon attempts.", AutitLogLevelEnum.Alert);
@@ -123,7 +124,7 @@ namespace TWeb.Framework
 
         public bool Logout()
         {
-            _auditLogService?.Log("User logout");
+            _auditLogService?.Log(AuditLogCategoryEnum.User, "User logout");
 
             _httpContextAccessor.HttpContext.Response.Cookies.Delete(_options.CurrentValue.Cookie.Name, new CookieOptions() { Expires = DateTimeOffset.UtcNow });
             _httpContextAccessor.HttpContext.Items.Remove("User");
@@ -156,7 +157,7 @@ namespace TWeb.Framework
 
         private void SetUserPassword(string newPass, ref User user)
         {
-            user.Salt = MD5.HashData(Encoding.UTF8.GetBytes($"{user.Id}{$"{user.Id}{user.Email}{user.Email}".GetHashCode()}"));
+            user.Salt = Encoding.UTF8.GetString(MD5.HashData(Encoding.UTF8.GetBytes($"{user.Id}{$"{user.Id}{user.Email}{user.Email}".GetHashCode()}")));
             user.Password = _secretHashingService.CreateHash(newPass, user.Salt);
         }
 
@@ -169,30 +170,66 @@ namespace TWeb.Framework
             }
         }
 
-        public User? GetCurrentUser()
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="context"></param>
+        /// <exception cref="SecurityTokenException"></exception>
+        /// <returns></returns>
+        private int? GetUserIdFromContext(HttpContext context)
         {
             int userId = 0;
 
-            if (!_httpContextAccessor.HttpContext.Items.Any(x => x.Key == "User"))
+            try
             {
-                var cookie = _httpContextAccessor.HttpContext.Request.Cookies.FirstOrDefault(x => x.Key == _options.CurrentValue.Cookie.Name).Value;
-                if (cookie == null) return null;
+                if (!_httpContextAccessor.HttpContext.Items.Any(x => x.Key == "User"))
+                {
+                    var cookie = _httpContextAccessor.HttpContext.Request.Cookies.FirstOrDefault(x => x.Key == _options.CurrentValue.Cookie.Name).Value;
+                    if (cookie == null) return null;
 
-                var claim = _jwtHandler.ValidateToken(cookie, _jwtValidationParameters, out SecurityToken token);
+                    var claim = _jwtHandler.ValidateToken(cookie, _jwtValidationParameters, out SecurityToken token);
 
-                if (!int.TryParse(claim.Claims.FirstOrDefault(x => x.Type == JwtRegisteredClaimNames.NameId)?.Value, out userId)) return null;
+                    if (!int.TryParse(claim.Claims.FirstOrDefault(x => x.Type == JwtRegisteredClaimNames.NameId)?.Value, out userId)) return null;
+                }
+                else
+                {
+                    userId = ((User)_httpContextAccessor.HttpContext.Items["User"])?.Id ?? 0;
+                }
             }
-            else
+            catch (SecurityTokenException ex) 
             {
-                userId = ((User)_httpContextAccessor.HttpContext.Items["User"]).Id;
+                _logger.LogError(ex, $"Token validation failed. {ex.Message}");
+                throw new UserNotAuthenticatedException($"Token validation failed. {ex.Message}", ex);
             }
+
+            return userId;
+        }
+
+        private User CheckUser(User? user)
+        {
+            if (user == null) throw new UserNotFoundException();
+            CheckUserIsLocked(user);
+            return user;
+        }
+
+        public async Task<User> GetCurrentUserAsync(CancellationToken ct = default)
+        {
+            var userId = GetUserIdFromContext(_httpContextAccessor.HttpContext).GetValueOrDefault(0);
+            if (userId < 1) throw new UserNotAuthenticatedException();
+
+            var user = (await _usersRepository.ListAsync(x => x.Id == userId, ct: ct))?.FirstOrDefault();
+
+            return CheckUser(user);
+        }
+
+        public User GetCurrentUser()
+        {
+            var userId = GetUserIdFromContext(_httpContextAccessor.HttpContext).GetValueOrDefault(0);
+            if (userId < 1) throw new UserNotAuthenticatedException();
 
             var user = _usersRepository.List(x => x.Id == userId)?.FirstOrDefault();
 
-            if (user == null) throw new UserNotFoundException();
-            CheckUserIsLocked(user);
-
-            return user;
+            return CheckUser(user);
         }
 
         private JwtSecurityToken GenerateToken(User user)
@@ -224,13 +261,13 @@ namespace TWeb.Framework
             char[] chars = new char[requiredLen];
             for (int i = 0; i < requiredLen; i++)
             {
-                chars[i] = validChars[RandomNumberGenerator.GetInt32(0, validChars.Length-1)];
+                chars[i] = validChars[RandomNumberGenerator.GetInt32(0, validChars.Length - 1)];
             }
 
             return new string(chars);
         }
 
-        private void SendEmail(User user, EmailOperation op, params string[] vars = null)
+        private void SendEmail(User user, string op, params string[] vars)
         {
             _logger.LogDebug($"Sending email {op}");
 
@@ -248,20 +285,20 @@ namespace TWeb.Framework
                 switch (op)
                 {
                     case EmailOperation.PasswordReset:
-                        _email.SendEmail(user.Email, "Password reset", createBody.Invoke($"<h1>Hi {user.Name}!</h1><p>Your new password: <pre><b>{vars[0]}</b></pre></p><br><p><i>Change your password ASAP!</i></p>"))
+                        _email.SendEmail(user.Email, "Password reset", createBody.Invoke($"<h1>Hi {user.Name}!</h1><p>Your new password: <pre><b>{vars[0]}</b></pre></p><br><p><i>Change your password ASAP!</i></p>"));
                         break;
                     case EmailOperation.Logon:
-                        _email.SendEmail(user.Email, "New logon", createBody.Invoke($"<h1>Hi {user.Name}!</h1><p>We have detected new logon to your account at {vars[1]} from IP {vars[0]}, user agent {vars[2]}</p>"))
+                        _email.SendEmail(user.Email, "New logon", createBody.Invoke($"<h1>Hi {user.Name}!</h1><p>We have detected new logon to your account at {vars[1]} from IP {vars[0]}, user agent {vars[2]}</p>"));
                         break;
                     case EmailOperation.PasswordChanged:
-                        _email.SendEmail(user.Email, "Password changed", createBody.Invoke($"<h1>Hi {user.Name}!</h1><p>Your password has bean changed.</p>"))
-                        break;     
+                        _email.SendEmail(user.Email, "Password changed", createBody.Invoke($"<h1>Hi {user.Name}!</h1><p>Your password has bean changed.</p>"));
+                        break;
                     case EmailOperation.AccountLocked:
-                        _email.SendEmail(user.Email, "Account locked", createBody.Invoke($"<h1>Hi {user.Name}!</h1><p>Your account has bean locked becaouse theres to many invalid logon attemptes.</p><p><b>Last invalid logon</b><br><ul><li>Date: {DateTime.UtcNow}</li><li>User agent: {vars[0]}</li><li>IP: {vars[1]}</li></ul></p>"))
+                        _email.SendEmail(user.Email, "Account locked", createBody.Invoke($"<h1>Hi {user.Name}!</h1><p>Your account has bean locked becaouse theres to many invalid logon attemptes.</p><p><b>Last invalid logon</b><br><ul><li>Date: {DateTime.UtcNow}</li><li>User agent: {vars[0]}</li><li>IP: {vars[1]}</li></ul></p>"));
                         break;
                 }
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 _logger.LogError(ex, $"Failed to send email. {ex.Message}");
             }

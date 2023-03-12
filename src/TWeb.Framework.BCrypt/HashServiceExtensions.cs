@@ -6,7 +6,7 @@ namespace TWeb.Framework.BCrypt
 {
     public static class HashServiceExtensions
     {
-        public static IServiceCollection UseTWebBCryptHashing(this IServiceCollection services)
+        public static IServiceCollection AddTWebBCryptHashing(this IServiceCollection services)
         {
             return services.AddSingleton<ISecretHashingService, BCryptHashingService>();
         }

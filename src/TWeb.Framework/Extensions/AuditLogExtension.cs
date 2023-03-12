@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -17,8 +18,10 @@ namespace TWeb.Framework.Extensions
             where TAuditLogRepository : class, IAuditLogRepository
             where TAuditLogService : class, IAuditLogService
         {
+            if (!services.Any(x => x.ImplementationInstance is IHttpContextAccessor))
+                throw new Exception("You need to implement IHttpContextAccessor");
+
             return services
-                .AddHttpContextAccessor()
                 .AddTransient<IAuditLogRepository, TAuditLogRepository>()
                 .AddTransient<IAuditLogService, TAuditLogService>();
         }

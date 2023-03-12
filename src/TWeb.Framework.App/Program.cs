@@ -24,7 +24,6 @@ namespace TWeb.Framework.App
             app.MapGet("/weatherforecast", (HttpContext httpContext) =>
             {
                 List<string> result = new List<string>();
-                result.OrderBy()
                 var forecast = Enumerable.Range(1, 5).Select(index =>
                     new WeatherForecast
                     {
